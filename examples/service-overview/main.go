@@ -20,7 +20,7 @@ import (
 	"flag"
 	"fmt"
 	"net/http"
-//	"time"
+	"html/template"
 
 	"k8s.io/client-go/1.4/kubernetes"
 	"k8s.io/client-go/1.4/pkg/api"
@@ -36,6 +36,17 @@ type Page struct {
     Body  []byte
 }
 
+const serviceTmpl = `
+<div>
+	<h2><a href='{{.URL}}'>Service '{{.serviceName}}'</a></h2>
+	<p><ul>
+		<li>URL: {{.URL}}
+		<li>Port: {{.port}}
+		<li><a href='{{.k8sAPI}}'>Kubernetes API object: '{{.k8sAPI}}'</a>
+	</ul></p>
+</div>
+`
+
 func handlerServices(w http.ResponseWriter, r *http.Request) {
 	// uses the current context in kubeconfig
 	config, err := clientcmd.BuildConfigFromFlags("", *kubeconfig)
@@ -47,12 +58,34 @@ func handlerServices(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		panic(err.Error())
 	}
-	services, err := clientset.Core().Services("").List(api.ListOptions{})
+	services_list, err := clientset.Core().Services("").List(api.ListOptions{})
 	if err != nil {
 		panic(err.Error())
 	}
-	numberOfServices := fmt.Sprintf("There are %d services in the cluster\n", len(services.Items))
-  fmt.Fprintf(w, "<p>Hi there! You requested %s!</p><p>Found %s services.</p>", r.URL.Path[1:], numberOfServices)
+	nodes_list, err := clientset.Core().Nodes().List(api.ListOptions{})
+	if err != nil {
+		panic(err.Error())
+	}
+	nodeAddress := nodes_list.Items[0].ObjectMeta.Name
+  fmt.Fprintf(w, "<h1>Hi there!<br />Found %d services.</h1>\n", len(services_list.Items))
+	for _,service := range services_list.Items {
+		if service.Spec.Ports[0].NodePort > 0 {
+			nodePort := service.Spec.Ports[0].NodePort
+			serviceURL := fmt.Sprintf("http://%s:%d/", nodeAddress, nodePort)
+			serviceName := service.ObjectMeta.Name
+			k8sAPI := fmt.Sprintf("http://%s:8080%s", nodeAddress, service.ObjectMeta.SelfLink)
+			serviceData := map[string]interface{}{
+		    "URL":         serviceURL,
+		    "port":        nodePort,
+		    "serviceName": serviceName,
+		    "k8sAPI":      k8sAPI,
+			}
+			t := template.Must(template.New("service").Parse(serviceTmpl))
+			if err := t.Execute(w, serviceData); err != nil {
+		    panic(err)
+			}
+		}
+	}
 }
 
 func main() {
